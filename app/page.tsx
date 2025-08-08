@@ -3,14 +3,14 @@
 import React, { useMemo, useState, useEffect } from "react";
 
 // ---- Types ----
-type Store = "Nike" | "Adidas" | "iShop" | "Insider Store" | "Amazon";
+type Store = "Nike" | "Adidas" | "iShop" | "Insider Store" | "Amazon" | "Outros";
 type Sort = "recent" | "popular" | "expiring";
 
 type Coupon = {
   id: string;
   store: Store;
   title: string;
-  code: string; // empty string means offer without code
+  code: string; // empty string = offer without code
   description?: string;
   url: string;
   expiresAt?: string;
@@ -20,7 +20,17 @@ type Coupon = {
   lastUsedAt?: string;
 };
 
-// ---- Seed data (static launch) ----
+// API deal shape from /api/deals
+type DealAPI = {
+  id: string;
+  title: string;
+  deal_url: string;
+  coupon_code: string | null;
+  subtitle: string | null;
+  published: boolean;
+};
+
+// ---- Seed data (fallback) ----
 const seedCoupons: Coupon[] = [
   {
     id: "nike-10off",
@@ -79,7 +89,6 @@ function formatDate(iso?: string) {
 
 function useLocalStorage<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(initial);
-  // load once on mount
   useEffect(() => {
     try {
       if (typeof window === "undefined") return;
@@ -87,7 +96,6 @@ function useLocalStorage<T>(key: string, initial: T) {
       if (raw != null) setValue(JSON.parse(raw) as T);
     } catch {}
   }, [key]);
-  // save when value changes
   useEffect(() => {
     try {
       if (typeof window === "undefined") return;
@@ -97,21 +105,46 @@ function useLocalStorage<T>(key: string, initial: T) {
   return [value, setValue] as const;
 }
 
-// ---- Component ----
+// ---- Page ----
 export default function CouponHub() {
   const [query, setQuery] = useState<string>("");
   const [store, setStore] = useState<Store | "Todas">("Todas");
   const [sort, setSort] = useState<Sort>("recent");
-  const [usesById, setUsesById] = useLocalStorage<Record<string, number>>(
-    "coupon-uses",
-    {}
-  );
+  const [usesById, setUsesById] = useLocalStorage<Record<string, number>>("coupon-uses", {});
   const [coupons, setCoupons] = useState<Coupon[]>(seedCoupons);
 
+  // Fetch published deals from your API and map to Coupon type
   async function fetchLiveCoupons(): Promise<void> {
-    // API temporarily disabled. Keep seed data for launch.
-    setCoupons(seedCoupons);
+    try {
+      const res = await fetch("/api/deals?published=true", { cache: "no-store" });
+      if (!res.ok) throw new Error("Falha ao carregar ofertas");
+
+      const json = await res.json();
+      const deals: DealAPI[] = json.data || [];
+
+      const mapped: Coupon[] = deals.map((d) => ({
+        id: d.id,
+        store: "Outros", // until we add a brand field in DB/admin
+        title: d.title,
+        code: d.coupon_code ?? "",
+        description: d.subtitle ?? undefined,
+        url: d.deal_url,
+        verifiedAt: new Date().toISOString(),
+        tags: d.coupon_code ? ["Cupom"] : ["Oferta"],
+      }));
+
+      setCoupons(mapped.length ? mapped : seedCoupons);
+    } catch (e) {
+      console.error(e);
+      setCoupons(seedCoupons);
+    }
   }
+
+  // Auto-load DB deals on first render; keep the button for manual refresh
+  useEffect(() => {
+    void fetchLiveCoupons();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const stores: ("Todas" | Store)[] = [
     "Todas",
@@ -119,6 +152,7 @@ export default function CouponHub() {
     "Adidas",
     "iShop",
     "Insider Store",
+    "Outros",
   ];
 
   const filtered = useMemo<Coupon[]>(() => {
@@ -170,7 +204,12 @@ export default function CouponHub() {
 
   function handleGo(url: string, id: string): void {
     setUsesById((m) => ({ ...m, [id]: (m[id] || 0) + 1 }));
-    window.open(url, "_blank", "noopener,noreferrer");
+    let finalUrl = url.trim();
+  if (!/^https?:\/\//i.test(finalUrl)) {
+    finalUrl = `https://${finalUrl}`;
+  }
+
+  window.open(finalUrl, "_blank", "noopener,noreferrer");
   }
 
   return (
