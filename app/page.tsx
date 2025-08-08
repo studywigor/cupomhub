@@ -2,30 +2,25 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 
-// NOTE: This is a single-file React page meant to be dropped into a Vite/Next/CRA project.
-// It uses Tailwind utility classes. In Next.js, put this as app/page.tsx or pages/index.tsx
-// and make sure Tailwind is configured. No external components required.
-//
-// ⚠️ Data: starts with mock coupons. Wire the `fetchLiveCoupons()` fn to your backend or
-// affiliate feed later. Buttons and layout mimic the vibe of bravocupom.com.br
-// without copying assets.
-
 // ---- Types ----
+type Store = "Nike" | "Adidas" | "iShop" | "Insider Store" | "Amazon";
+type Sort = "recent" | "popular" | "expiring";
+
 type Coupon = {
   id: string;
-  store: "Nike" | "Adidas" | "iShop" | "Insider Store" | "Amazon";
+  store: Store;
   title: string;
-  code: string; // "VER OFERTA" will be represented as empty string
+  code: string; // empty string means offer without code
   description?: string;
-  url: string; // destination offer or store page
-  expiresAt?: string; // ISO date string
-  verifiedAt?: string; // ISO date string
+  url: string;
+  expiresAt?: string;
+  verifiedAt?: string;
   tags?: string[];
   uses?: number;
   lastUsedAt?: string;
 };
 
-// ---- Mock data (replace with live feed) ----
+// ---- Seed data (static launch) ----
 const seedCoupons: Coupon[] = [
   {
     id: "nike-10off",
@@ -43,7 +38,7 @@ const seedCoupons: Coupon[] = [
     id: "adidas-frete-gratis",
     store: "Adidas",
     title: "Frete grátis acima de R$299",
-    code: "", // oferta sem código
+    code: "",
     description: "Aplicado automaticamente no checkout.",
     url: "https://www.adidas.com.br",
     verifiedAt: new Date().toISOString(),
@@ -74,63 +69,59 @@ const seedCoupons: Coupon[] = [
   },
 ];
 
-// ---- Helpers ----
+// ---- Utils ----
 function formatDate(iso?: string) {
   if (!iso) return "—";
-  try {
-    const d = new Date(iso);
-    return d.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
-  } catch {
-    return "—";
-  }
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
 }
 
 function useLocalStorage<T>(key: string, initial: T) {
-  const [value, setValue] = useState<T>(() => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? (JSON.parse(raw) as T) : initial;
-    } catch {
-      return initial;
-    }
-  });
+  const [value, setValue] = useState<T>(initial);
+  // load once on mount
   useEffect(() => {
     try {
-      localStorage.setItem(key, JSON.stringify(value));
+      if (typeof window === "undefined") return;
+      const raw = window.localStorage.getItem(key);
+      if (raw != null) setValue(JSON.parse(raw) as T);
+    } catch {}
+  }, [key]);
+  // save when value changes
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      window.localStorage.setItem(key, JSON.stringify(value));
     } catch {}
   }, [key, value]);
   return [value, setValue] as const;
 }
 
-// ---- Main App ----
+// ---- Component ----
 export default function CouponHub() {
-  const [query, setQuery] = useState("");
-  const [store, setStore] = useState<"Todas" | Coupon["store"]>("Todas");
-  const [sort, setSort] = useState<"recent" | "popular" | "expiring">("recent");
-
-  // Persist uses locally so clicks look alive in demo
+  const [query, setQuery] = useState<string>("");
+  const [store, setStore] = useState<Store | "Todas">("Todas");
+  const [sort, setSort] = useState<Sort>("recent");
   const [usesById, setUsesById] = useLocalStorage<Record<string, number>>(
     "coupon-uses",
     {}
   );
-
   const [coupons, setCoupons] = useState<Coupon[]>(seedCoupons);
 
-  // TODO: Replace with your API endpoint once scraping/feeds are set up
-  async function fetchLiveCoupons() {
-    try {
-      const res = await fetch("/api/coupons?provider=amazon");
-      if (!res.ok) throw new Error("Falha ao buscar ofertas da Amazon");
-      const data: Coupon[] = await res.json();
-      setCoupons(data);
-    } catch (e) {
-      console.error(e);
-      // fallback to seed data if API fails
-      setCoupons(seedCoupons);
-    }
+  async function fetchLiveCoupons(): Promise<void> {
+    // API temporarily disabled. Keep seed data for launch.
+    setCoupons(seedCoupons);
   }
 
-  const filtered = useMemo(() => {
+  const stores: ("Todas" | Store)[] = [
+    "Todas",
+    "Nike",
+    "Adidas",
+    "iShop",
+    "Insider Store",
+  ];
+
+  const filtered = useMemo<Coupon[]>(() => {
     let data = coupons.map((c) => ({
       ...c,
       uses: (c.uses || 0) + (usesById[c.id] || 0),
@@ -139,14 +130,14 @@ export default function CouponHub() {
     if (store !== "Todas") data = data.filter((c) => c.store === store);
     if (query.trim()) {
       const q = query.toLowerCase();
-      data = data.filter(
-        (c) =>
-          c.title.toLowerCase().includes(q) ||
-          c.description?.toLowerCase().includes(q) ||
-          c.tags?.some((t) => t.toLowerCase().includes(q)) ||
-          c.store.toLowerCase().includes(q) ||
-          c.code?.toLowerCase().includes(q)
-      );
+      data = data.filter((c) => {
+        const inTitle = c.title.toLowerCase().includes(q);
+        const inDesc = (c.description || "").toLowerCase().includes(q);
+        const inTags = (c.tags || []).some((t: string) => t.toLowerCase().includes(q));
+        const inStore = c.store.toLowerCase().includes(q as string);
+        const inCode = (c.code || "").toLowerCase().includes(q);
+        return inTitle || inDesc || inTags || inStore || inCode;
+      });
     }
 
     switch (sort) {
@@ -171,25 +162,16 @@ export default function CouponHub() {
     return data;
   }, [coupons, store, query, sort, usesById]);
 
-  function handleCopy(code: string, id: string) {
+  function handleCopy(code: string, id: string): void {
     if (!code) return;
-    navigator.clipboard.writeText(code);
+    void navigator.clipboard.writeText(code);
     setUsesById((m) => ({ ...m, [id]: (m[id] || 0) + 1 }));
   }
 
-  function handleGo(url: string, id: string) {
+  function handleGo(url: string, id: string): void {
     setUsesById((m) => ({ ...m, [id]: (m[id] || 0) + 1 }));
-    window.open(url, "_blank");
+    window.open(url, "_blank", "noopener,noreferrer");
   }
-
-  const stores: ("Todas" | Coupon["store"])[] = [
-    "Todas",
-    "Nike",
-    "Adidas",
-    "iShop",
-    "Insider Store",
-    "Amazon",
-  ];
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
@@ -197,8 +179,7 @@ export default function CouponHub() {
       <header className="sticky top-0 z-20 backdrop-blur bg-white/70 border-b">
         <div className="mx-auto max-w-6xl px-4 py-3 flex items-center gap-3 justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-2xl bg-black text-white grid place-items-center font-bold">%
-            </div>
+            <div className="w-9 h-9 rounded-2xl bg-black text-white grid place-items-center font-bold">%</div>
             <div className="flex flex-col leading-tight">
               <h1 className="text-xl font-extrabold tracking-tight">CupomHub</h1>
               <p className="text-xs text-gray-500">Cupons e ofertas · Brasil</p>
@@ -208,13 +189,13 @@ export default function CouponHub() {
           <div className="hidden md:flex items-center gap-2">
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
               placeholder="Buscar cupom, loja, tag..."
-              className="w-80 border rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200"
+              className="w-72 border rounded-xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200"
             />
             <select
               value={store}
-              onChange={(e) => setStore(e.target.value as any)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setStore(e.target.value as Store | "Todas")}
               className="border rounded-xl px-3 py-2 text-sm"
             >
               {stores.map((s) => (
@@ -225,7 +206,7 @@ export default function CouponHub() {
             </select>
             <select
               value={sort}
-              onChange={(e) => setSort(e.target.value as any)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSort(e.target.value as Sort)}
               className="border rounded-xl px-3 py-2 text-sm"
             >
               <option value="recent">Mais recentes</option>
@@ -233,7 +214,7 @@ export default function CouponHub() {
               <option value="expiring">Vencendo antes</option>
             </select>
             <button
-              onClick={fetchLiveCoupons}
+              onClick={() => void fetchLiveCoupons()}
               className="ml-1 rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
               title="Atualizar cupons"
             >
@@ -247,14 +228,14 @@ export default function CouponHub() {
       <div className="md:hidden px-4 py-3 flex flex-col gap-2 border-b">
         <input
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setQuery(e.target.value)}
           placeholder="Buscar cupom, loja, tag..."
           className="w-full border rounded-xl px-4 py-2 text-sm"
         />
         <div className="flex gap-2">
           <select
             value={store}
-            onChange={(e) => setStore(e.target.value as any)}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setStore(e.target.value as Store | "Todas")}
             className="flex-1 border rounded-xl px-3 py-2 text-sm"
           >
             {stores.map((s) => (
@@ -265,7 +246,7 @@ export default function CouponHub() {
           </select>
           <select
             value={sort}
-            onChange={(e) => setSort(e.target.value as any)}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSort(e.target.value as Sort)}
             className="flex-1 border rounded-xl px-3 py-2 text-sm"
           >
             <option value="recent">Mais recentes</option>
@@ -273,7 +254,7 @@ export default function CouponHub() {
             <option value="expiring">Vencendo antes</option>
           </select>
           <button
-            onClick={fetchLiveCoupons}
+            onClick={() => void fetchLiveCoupons()}
             className="rounded-xl border px-3 py-2 text-sm"
           >
             Atualizar
@@ -293,7 +274,7 @@ export default function CouponHub() {
           ].map((s) => (
             <button
               key={s.name}
-              onClick={() => setStore(s.name as any)}
+              onClick={() => setStore(s.name as Store)}
               className={`group relative overflow-hidden rounded-2xl p-4 text-left text-white ${s.color}`}
             >
               <div className="text-xs/5 opacity-70">Cupons</div>
@@ -311,7 +292,8 @@ export default function CouponHub() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl grid place-items-center text-white font-bold"
+                  <div
+                    className="w-10 h-10 rounded-xl grid place-items-center text-white font-bold"
                     style={{
                       background:
                         c.store === "Nike"
@@ -378,15 +360,13 @@ export default function CouponHub() {
           ))}
         </section>
 
-        {/* Footer */}
         <footer className="mt-10 py-10 text-center text-xs text-gray-500">
           <div className="mb-2">© {new Date().getFullYear()} CupomHub</div>
           <div className="mb-4">Não afiliado a Nike, Adidas, iShop ou Insider Store.</div>
           <div className="max-w-3xl mx-auto text-gray-400">
             <p>
-              Dica: para manter cupons sempre válidos, conecte este site a uma API
-              própria que consome feeds de afiliados (ex.: Awin, CJ, Rakuten, Lomadee)
-              ou scrapers que respeitem termos de uso e robots.txt.
+              Lançamento com ofertas estáticas (sem API). Quando quiser ativar feeds/afiliados,
+              adicionamos uma rota /api/coupons e variáveis de ambiente e reimplantamos.
             </p>
           </div>
         </footer>
@@ -394,137 +374,3 @@ export default function CouponHub() {
     </div>
   );
 }
-
-// ---- Amazon provider API (Next.js) ----
-// Create /app/api/coupons/route.ts and install the SDK:
-//   npm i paapi5-nodejs-sdk
-// Then paste the code below. It returns Amazon items as "offer-only" coupons.
-/*
-import type { NextRequest } from "next/server";
-import { Configuration, DefaultApi, SearchItemsRequest } from "paapi5-nodejs-sdk";
-
-export const runtime = "nodejs"; // uses Node crypto
-
-type Coupon = {
-  id: string;
-  store: "Amazon";
-  title: string;
-  code: string; // empty for Amazon offers
-  description?: string;
-  url: string;
-  expiresAt?: string;
-  verifiedAt?: string;
-  tags?: string[];
-  uses?: number;
-};
-
-const config = new Configuration({
-  accessKey: process.env.AMZ_ACCESS_KEY_ID!,
-  secretKey: process.env.AMZ_SECRET_ACCESS_KEY!,
-  host: process.env.AMZ_ENDPOINT || "webservices.amazon.com",
-  region: process.env.AMZ_REGION || "us-east-1",
-});
-
-const api = new DefaultApi(config);
-
-function toCoupon(item: any): Coupon | null {
-  const asin = item?.ASIN;
-  const title = item?.ItemInfo?.Title?.DisplayValue;
-  const price = item?.Offers?.Listings?.[0]?.Price?.DisplayAmount;
-  const url = item?.DetailPageURL;
-  if (!asin || !title || !url) return null;
-  const desc = price ? `Preço: ${price}` : undefined;
-  return {
-    id: `amz-${asin}`,
-    store: "Amazon",
-    title,
-    code: "",
-    description: desc,
-    url,
-    verifiedAt: new Date().toISOString(),
-    tags: ["Oferta"],
-  };
-}
-
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  // You can pass ?q= to override the default keywords
-  const q = searchParams.get("q");
-  const keywords = q || "Nike OR Adidas OR iPhone OR Insider";
-
-  const request: SearchItemsRequest = {
-    Keywords: keywords,
-    SearchIndex: "All",
-    PartnerTag: process.env.AMZ_ASSOCIATE_TAG!, // e.g., corredephd-20
-    PartnerType: "Associates",
-    Marketplace: "www.amazon.com",
-    Resources: [
-      "Images.Primary.Large",
-      "ItemInfo.Title",
-      "Offers.Listings.Price",
-      "Offers.Listings.MerchantInfo",
-    ],
-  };
-
-  try {
-    const result = await api.searchItems(request);
-    const items = (result?.SearchResult?.Items || []) as any[];
-    const coupons = items
-      .map(toCoupon)
-      .filter(Boolean) as Coupon[];
-
-    return new Response(JSON.stringify(coupons), {
-      headers: { "content-type": "application/json" },
-      status: 200,
-    });
-  } catch (e: any) {
-    console.error("PA-API error", e?.message || e);
-    return new Response(JSON.stringify([]), {
-      headers: { "content-type": "application/json" },
-      status: 200,
-    });
-  }
-}
-
-// .env.local
-// AMZ_ACCESS_KEY_ID=************************
-// AMZ_SECRET_ACCESS_KEY=************************
-// AMZ_ASSOCIATE_TAG=corredephd-20
-// AMZ_REGION=us-east-1
-// AMZ_ENDPOINT=webservices.amazon.com
-*/
-
-// ---- OPTIONAL: Scraper outline (Node + Cheerio) ----
-// ⚠️ Always check each site's Terms of Use before scraping. Prefer affiliate feeds.
-/*
-import axios from "axios";
-import * as cheerio from "cheerio";
-
-async function scrapeNikeBR(): Promise<Coupon[]> {
-  const res = await axios.get("https://www.nike.com/br/promocoes", {
-    headers: { "User-Agent": "Mozilla/5.0" },
-  });
-  const $ = cheerio.load(res.data);
-  const items: Coupon[] = [];
-  // Parse promo blocks (example selectors, adjust to real DOM)
-  $(".promo-card").each((_, el) => {
-    const title = $(el).find(".promo-title").text().trim();
-    const code = $(el).find(".promo-code").text().trim();
-    const url = $(el).find("a").attr("href") || "https://www.nike.com/br";
-    items.push({
-      id: `nike-${Buffer.from(title).toString("hex").slice(0, 8)}`,
-      store: "Nike",
-      title: title || "Oferta Nike",
-      code,
-      url,
-      verifiedAt: new Date().toISOString(),
-    });
-  });
-  return items;
-}
-*/
-
-// ---- OPTIONAL: Validation idea ----
-// To validate codes, stand up a server-side job that periodically tests codes
-// on public endpoints or via affiliate API status. Avoid automating checkouts.
-// Store only still-working codes in your DB; purge expired ones daily.
